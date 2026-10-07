@@ -17,6 +17,7 @@ import {
   type DeviceIdMapping
 } from './kproxy'
 import { fetchKiroModels, fetchSubscriptionToken, fetchAvailableSubscriptions, setUserPreference, setUseKProxyForApiInProxy, setLogStreamEvents, setPayloadSizeLimitKB, setTokenBufferReserve, setEnableTokenBufferReserve, callKiroApi, fetchEnterpriseProfileArn, setProfileArnPersistCallback, setAgentMode } from './proxy/kiroApi'
+import { initModelAliases } from './proxy/modelAliases'
 import {
   writeKiroAuthTokenFile,
   readKiroAuthTokenFile,
@@ -2437,6 +2438,11 @@ app.whenReady().then(async () => {
   // 初始化日志系统（尽早拦截，确保所有 console 输出都进入日志存储）
   proxyLogStore.initialize(app.getPath('userData'))
   interceptConsole()
+
+  // 加载用户自定义模型别名映射（与代码内置 MODEL_ID_MAP 取合集）。
+  // 必须早于 ProxyServer / 反代请求，否则 mapModelId() 首次调用只能用内置映射。
+  // 文件缺失时会自动创建默认模板到 userData/model-aliases.json。
+  await initModelAliases(app.getPath('userData'))
 
   // 启动 Kiro IDE token 文件监听（反向同步：IDE 自己 refresh 后把新 token 同步回反代 store）
   // 见 syncIdeTokenChangeToStore 注释

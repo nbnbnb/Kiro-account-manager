@@ -1,0 +1,122 @@
+name: 构建并发布
+
+on:
+  # 推送形如 v1.7.14 的 tag 时自动构建 + 发布到 GitHub Release
+  push:
+    tags:
+      - 'v*.*.*'
+  # 允许手动触发（仅构建并上传 artifacts，不发布 Release）
+  workflow_dispatch:
+
+permissions:
+  contents: write  # 创建/上传 Release 必须
+
+jobs:
+  build:
+    name: 构建 (${{ matrix.os }} / ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows 只构建 x64（项目要求）；macOS 同时构建 x64（Intel）和 arm64（M 系列）
+        include:
+          - os: windows-latest
+            arch: x64
+            build_script: build:win
+            artifact_glob: |
+              release/*-x64-setup.exe
+              release/*-x64.exe
+              release/*-x64-blockmap.yaml
+              release/latest.yml
+              release/*-x64.yml
+          - os: macos-latest
+            arch: x64
+            build_script: build:mac
+            artifact_glob: |
+              release/*-x64-mac.zip
+              release/*-x64-mac.dmg
+              release/*-x64-mac.dmg.blockmap
+              release/*-x64.dmg.blockmap
+              release/latest-mac.yml
+              release/*-x64-mac.yml
+          - os: macos-latest
+            arch: arm64
+            build_script: build:mac
+            artifact_glob: |
+              release/*-arm64-mac.zip
+              release/*-arm64-mac.dmg
+              release/*-arm64-mac.dmg.blockmap
+              release/*-arm64.dmg.blockmap
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 构建（${{ matrix.os }} / ${{ matrix.arch }}）
+        # electron-builder 通过 --x64 / --arm64 覆盖 electron-builder.yml 中的多架构配置
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 不在 CI 里做签名
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          mkdir -p release
+          npx electron-vite build
+          npx electron-builder --${{ matrix.arch }} --publish never
+        shell: bash
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiro-account-manager-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: 发布到 GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: 校验产物
+        run: |
+          echo "待发布的文件清单："
+          ls -la release/ || true
+          if [ -z "$(ls -A release/ 2>/dev/null)" ]; then
+            echo "::error::release 目录为空，没有任何构建产物"
+            exit 1
+          fi
+
+      - name: 创建 Release 并上传产物
+        uses: softprops/action-gh-release@v2
+        with:
+          # 从 tag (refs/tags/v1.7.14) 提取版本号作为 release 标题
+          name: Kiro Account Manager ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release/*.exe
+            release/*.zip
+            release/*.dmg
+            release/*.blockmap
+            release/latest*.yml
+            release/*-mac.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

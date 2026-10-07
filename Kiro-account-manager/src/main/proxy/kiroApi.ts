@@ -24,6 +24,10 @@ import {
   setModelContextWindow,
   getModelContextWindow
 } from './tokenCounter'
+import {
+  registerBuiltinAliases,
+  getEffectiveModelMap
+} from './modelAliases'
 // 重新导出以保持向后兼容（proxyServer.ts 等模块仍 from './kiroApi' 导入）
 export { setModelContextWindow, getModelContextWindow }
 
@@ -307,6 +311,9 @@ const MODEL_ID_MAP: Record<string, string> = {
   'default': 'claude-sonnet-4.5'
 }
 
+// 把内置映射注入 modelAliases 模块，便于 getEffectiveModelMap() 合并用户自定义映射
+registerBuiltinAliases(MODEL_ID_MAP)
+
 /**
  * 归一化 Claude 版本号：把版本号里的短横线转成点号。
  *
@@ -326,20 +333,25 @@ function normalizeClaudeVersion(modelId: string): string {
 }
 
 export function mapModelId(model: string): string {
+  // 每次调用都重新获取合集：保证用户修改 userData/model-aliases.json 后，
+  // initModelAliases() 重新执行即可热更新（无需重启应用外的其它模块）
+  const effectiveMap = getEffectiveModelMap()
+  const fallback = effectiveMap.default || 'claude-sonnet-4.5'
+
   let modelId = model.trim()
-  if (!modelId) return MODEL_ID_MAP.default
+  if (!modelId) return fallback
   if (isCodeWhispererModelId(modelId)) return modelId
   // 0) 归一化版本号短横 → 点号（claude-opus-4-6 → claude-opus-4.6），兼容不支持 "." 的客户端
   modelId = normalizeClaudeVersion(modelId)
   const lower = modelId.toLowerCase()
-  // 1) 显式 alias 映射优先
-  if (MODEL_ID_MAP[lower]) return MODEL_ID_MAP[lower]
+  // 1) 显式 alias 映射优先（合集 = 内置 ∪ 用户配置文件，配置覆盖内置）
+  if (effectiveMap[lower]) return effectiveMap[lower]
   // 2) 看似 Kiro 支持的 Claude 模型格式 (claude-{sonnet|haiku|opus}-{ver})，原样透传
   //    用于向前兼容尚未加入 MODEL_ID_MAP 的新发布模型
   if (/^claude-(sonnet|haiku|opus)-/.test(lower)) return modelId
   // 3) 完全未知的 model（用户拼错/不存在），兜底到 default 避免直接 400
-  console.warn(`[Kiro API] Unknown model "${modelId}" → fallback to "${MODEL_ID_MAP.default}"`)
-  return MODEL_ID_MAP.default
+  console.warn(`[Kiro API] Unknown model "${modelId}" → fallback to "${fallback}"`)
+  return fallback
 }
 
 function clonePayload(payload: KiroPayload): KiroPayload {
