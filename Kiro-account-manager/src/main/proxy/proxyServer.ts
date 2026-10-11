@@ -30,7 +30,8 @@ import {
   createOpenaiStreamChunk,
   createClaudeStreamEvent,
   responsesToOpenAIChat,
-  openAIChatToResponsesResponse
+  openAIChatToResponsesResponse,
+  normalizeOpenAITools
 } from './translator'
 import { ToolNameRegistry } from './toolNameRegistry'
 import { promptCacheTracker } from './promptCacheTracker'
@@ -769,22 +770,27 @@ export class ProxyServer {
       return { ...request, tools: undefined, tool_choice: undefined }
     }
 
-    if (request.tool_choice && typeof request.tool_choice === 'object' && request.tool_choice.type === 'function' && !request.tool_choice.function?.name) {
+    const normalizedRequest = {
+      ...request,
+      tools: request.tools ? normalizeOpenAITools(request.tools) : undefined
+    }
+
+    if (normalizedRequest.tool_choice && typeof normalizedRequest.tool_choice === 'object' && normalizedRequest.tool_choice.type === 'function' && !normalizedRequest.tool_choice.function?.name) {
       throw new Error('tool_choice function requires a tool name')
     }
 
-    if (request.tool_choice && typeof request.tool_choice === 'object' && request.tool_choice.function?.name) {
-      const selectedToolName = request.tool_choice.function.name
-      if (!request.tools?.some(tool => tool.function.name === selectedToolName)) {
+    if (normalizedRequest.tool_choice && typeof normalizedRequest.tool_choice === 'object' && normalizedRequest.tool_choice.function?.name) {
+      const selectedToolName = normalizedRequest.tool_choice.function.name
+      if (!normalizedRequest.tools?.some(tool => tool.function?.name === selectedToolName)) {
         throw new Error(`tool_choice references unknown tool: ${selectedToolName}`)
       }
       return {
-        ...request,
-        tools: request.tools?.filter(tool => tool.function.name === selectedToolName)
+        ...normalizedRequest,
+        tools: normalizedRequest.tools?.filter(tool => tool.function?.name === selectedToolName)
       }
     }
 
-    return request
+    return normalizedRequest
   }
 
   private prepareClaudeRequest(request: ClaudeRequest): ClaudeRequest {
@@ -844,7 +850,10 @@ export class ProxyServer {
   }
 
   private withWorkspaceToolRecoveryInstruction(request: OpenAIChatRequest): OpenAIChatRequest {
-    const toolNames = request.tools?.map(tool => tool.function.name).filter(Boolean).slice(0, 40) || []
+    const toolNames = normalizeOpenAITools(request.tools || [])
+      .map(tool => tool.function.name)
+      .filter(Boolean)
+      .slice(0, 40)
     const instruction = [
       this.workspaceToolRecoveryInstruction(toolNames)
     ].filter(Boolean).join('\n')

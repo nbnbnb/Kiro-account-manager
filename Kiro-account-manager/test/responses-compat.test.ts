@@ -8,6 +8,7 @@ mock.module('electron', () => ({
 const {
   openaiToKiro,
   openAIChatToResponsesResponse,
+  normalizeOpenAITools,
   responsesToOpenAIChat
 } = await import('../src/main/proxy/translator')
 const { mapModelId } = await import('../src/main/proxy/kiroApi')
@@ -22,6 +23,77 @@ describe('Kiro-native GPT-5.6 model routing', () => {
     expect(mapModelId('gpt-5-6-terra')).toBe('gpt-5.6-terra')
     expect(mapModelId('codex-auto-review')).toBe('gpt-5.6-sol')
     expect(getModelContextLength('gpt-5.6-sol')).toBe(272000)
+  })
+})
+
+describe('OpenAI Chat Completions compatibility', () => {
+  test('normalizes Cursor-style tools passed through Chat Completions', () => {
+    const request = {
+      model: 'gpt-5.6-sol',
+      messages: [{ role: 'user' as const, content: 'Inspect the workspace.' }],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'nested',
+            description: 'nested tool',
+            parameters: { type: 'object', properties: {} }
+          }
+        },
+        {
+          type: 'function',
+          name: 'flat',
+          description: 'flat tool',
+          parameters: { type: 'object', properties: { path: { type: 'string' } } }
+        },
+        {
+          type: 'custom',
+          name: 'apply_patch',
+          description: 'Apply a patch to files in the workspace.'
+        },
+        { type: 'local_shell' },
+        { type: 'web_search_preview' }
+      ]
+    }
+
+    const converted = openaiToKiro(request)
+    const tools = converted.conversationState.currentMessage.userInputMessage
+      .userInputMessageContext?.tools || []
+    const specifications = tools.flatMap(tool =>
+      'toolSpecification' in tool ? [tool.toolSpecification] : []
+    )
+
+    expect(specifications.map(tool => tool.name)).toEqual([
+      'nested',
+      'flat',
+      'apply_patch',
+      'exec_command'
+    ])
+    expect(specifications[0]).toMatchObject({
+      description: 'nested tool',
+      inputSchema: { json: { type: 'object', properties: {} } }
+    })
+    expect(specifications[1]).toMatchObject({
+      description: 'flat tool',
+      inputSchema: {
+        json: { type: 'object', properties: { path: { type: 'string' } } }
+      }
+    })
+    expect(specifications[2].inputSchema).toMatchObject({
+      json: {
+        required: ['input'],
+        properties: { input: { type: 'string' } }
+      }
+    })
+    expect(specifications[3].inputSchema).toMatchObject({
+      json: {
+        required: ['cmd'],
+        properties: { cmd: { type: 'string' } }
+      }
+    })
+
+    const normalizedOnce = normalizeOpenAITools(request.tools)
+    expect(normalizeOpenAITools(normalizedOnce)).toEqual(normalizedOnce)
   })
 })
 

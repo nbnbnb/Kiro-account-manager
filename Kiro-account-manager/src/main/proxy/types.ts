@@ -8,7 +8,9 @@ export interface OpenAIChatRequest {
   top_p?: number
   max_tokens?: number
   stream?: boolean
-  tools?: OpenAITool[]
+  // Chat Completions 客户端通常发送嵌套 function 工具，但 Cursor 等兼容客户端
+  // 也会发送扁平 function、custom 和内置工具，转换层会统一归一化。
+  tools?: OpenAIResponseTool[]
   tool_choice?: string | { type: string; function: { name: string } }
   response_format?: { type: string; json_schema?: unknown }
   conversation_id?: string
@@ -49,6 +51,7 @@ export interface OpenAITool {
   // Kiro can invoke them, then restored to custom_tool_call in the response.
   response_tool_type?: 'function' | 'custom' | 'local_shell'
   cache_control?: ClaudeCacheControl
+  [key: string]: unknown
 }
 
 export interface OpenAIToolCall {
@@ -164,6 +167,7 @@ export interface OpenAIResponseTool {
   inputSchema?: unknown
   format?: unknown
   function?: OpenAITool['function']
+  response_tool_type?: OpenAITool['response_tool_type']
   cache_control?: ClaudeCacheControl
   [key: string]: unknown
 }
