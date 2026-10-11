@@ -240,7 +240,7 @@ export function responsesToOpenAIChat(request: OpenAIResponsesRequest): OpenAICh
   if (request.top_p !== undefined) chatRequest.top_p = request.top_p
   if (request.max_output_tokens !== undefined) chatRequest.max_tokens = request.max_output_tokens
   if (request.stream !== undefined) chatRequest.stream = request.stream
-  const normalizedTools = normalizeResponseTools(responseTools)
+  const normalizedTools = normalizeOpenAITools(responseTools)
   if (normalizedTools.length > 0) chatRequest.tools = normalizedTools
   const toolChoice = convertResponseToolChoice(request.tool_choice)
   if (toolChoice !== undefined) chatRequest.tool_choice = toolChoice
@@ -333,7 +333,7 @@ function collectAdditionalResponseTools(
   }
 }
 
-function normalizeResponseTools(tools: OpenAIResponseTool[]): OpenAITool[] {
+export function normalizeOpenAITools(tools: OpenAIResponseTool[]): OpenAITool[] {
   const byName = new Map<string, OpenAITool>()
   for (const tool of tools) {
     if (!tool || typeof tool !== 'object') continue
@@ -346,11 +346,11 @@ function normalizeResponseTools(tools: OpenAIResponseTool[]): OpenAITool[] {
     const isShellTool = rawType === 'local_shell' || rawType === 'shell'
     const name = nested?.name || tool.name || (isShellTool ? 'exec_command' : undefined)
     const type = tool.type || (name ? 'function' : undefined)
-    const responseToolType: OpenAITool['response_tool_type'] = isShellTool
+    const responseToolType: OpenAITool['response_tool_type'] = tool.response_tool_type || (isShellTool
       ? 'local_shell'
-      : type === 'custom' ? 'custom' : type === 'function' ? 'function' : undefined
+      : type === 'custom' ? 'custom' : type === 'function' ? 'function' : undefined)
     if (!name || (!isShellTool && type !== 'function' && type !== 'custom')) {
-      console.warn(`[Responses] Skipping unsupported tool type: ${type || 'unknown'}`)
+      console.warn(`[OpenAI] Skipping unsupported tool type: ${type || 'unknown'}`)
       continue
     }
     const parameters = isShellTool
@@ -456,17 +456,18 @@ function convertResponseToolChoice(toolChoice: OpenAIResponsesRequest['tool_choi
 export function openAIChatToResponsesResponse(
   response: OpenAIChatResponse,
   previousResponseId?: string,
-  tools?: OpenAITool[]
+  tools?: OpenAIResponseTool[]
 ): OpenAIResponsesResponse {
+  const normalizedTools = normalizeOpenAITools(tools || [])
   const customToolNames = new Set(
-    tools
+    normalizedTools
       ?.filter(tool => tool.response_tool_type === 'custom')
       .map(tool => tool.function.name) || []
   )
   const output: OpenAIResponseOutputItem[] = response.choices.flatMap<OpenAIResponseOutputItem>(choice => {
     if (choice.message.tool_calls?.length) {
       return choice.message.tool_calls.map(toolCall => {
-        const localShellTool = tools?.some(tool =>
+        const localShellTool = normalizedTools.some(tool =>
           tool.response_tool_type === 'local_shell' && tool.function.name === toolCall.function.name
         )
         if (localShellTool) {
@@ -803,7 +804,10 @@ export function openaiToKiro(
   const finalContent = currentContent || 'Continue.'
 
   // 转换工具定义
-  const kiroTools = convertOpenAITools(request.tools, toolNameRegistry)
+  const kiroTools = convertOpenAITools(
+    normalizeOpenAITools(request.tools || []),
+    toolNameRegistry
+  )
 
   // OpenAI 兼容请求的 thinking/reasoning_effort 映射到 Kiro additionalModelRequestFields
   const additionalModelRequestFields = buildThinkingFields(
