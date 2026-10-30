@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Trash2, Download, RefreshCw, Search, Filter, ArrowDown, ChevronsDown, AlertCircle, Info, Bug, AlertTriangle, X } from 'lucide-react'
 import { Button, Badge, Input } from '../ui'
 import { useTranslation } from '../../hooks/useTranslation'
+import { useProxyLogs } from '../../hooks/useProxyLogs'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
 interface LogEntry {
@@ -46,8 +47,6 @@ const LEVEL_BTN_ACTIVE: Record<string, string> = {
 export function LogsPage() {
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [totalCount, setTotalCount] = useState(0)
   const [filter, setFilter] = useState('')
   const [levelFilter, setLevelFilter] = useState<LogLevel>('ALL')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -57,41 +56,27 @@ export function LogsPage() {
     return localStorage.getItem('systemLogs_displayLimit') || '5000'
   })
   const [isAtBottom, setIsAtBottom] = useState(true)
-  const [isLoading, setIsLoading] = useState(false)
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const [newLogCount, setNewLogCount] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const prevLogCount = useRef(0)
-
-  const fetchLogs = useCallback(async () => {
-    try {
-      const fetchCount = displayLimit === 'all' ? undefined : parseInt(displayLimit) || undefined
-      const [allLogs, count] = await Promise.all([
-        window.api.proxyGetLogs(fetchCount),
-        window.api.proxyGetLogsCount()
-      ])
-      const newLogs = allLogs as LogEntry[]
-      setLogs(newLogs)
-      setTotalCount(count)
-      // 如果用户不在底部，累计新日志数
-      if (!isAtBottom && newLogs.length > prevLogCount.current) {
-        setNewLogCount(prev => prev + (newLogs.length - prevLogCount.current))
-      }
-      prevLogCount.current = newLogs.length
-    } catch {
-      // ignore
-    }
-  }, [isAtBottom, displayLimit])
+  // 供增量回调读取最新的"是否在底部"，避免把 isAtBottom 放进依赖导致轮询反复重建
+  const isAtBottomRef = useRef(true)
 
   useEffect(() => {
-    setIsLoading(true)
-    fetchLogs().finally(() => setIsLoading(false))
-    pollRef.current = setInterval(fetchLogs, 1500)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [fetchLogs])
+    isAtBottomRef.current = isAtBottom
+  }, [isAtBottom])
+
+  // 用户不在底部时累计新日志数
+  const handleAppend = useCallback((count: number) => {
+    if (!isAtBottomRef.current) setNewLogCount(prev => prev + count)
+  }, [])
+
+  // 增量拉取：首次取最近 displayLimit 条，之后每 1.5 秒只取新增部分，没有新日志时不重渲染
+  const { logs, total: totalCount, loading: isLoading, reload } = useProxyLogs({
+    enabled: true,
+    limit: displayLimit === 'all' ? 0 : parseInt(displayLimit) || 0,
+    onAppend: handleAppend
+  })
 
   // 持久化 displayLimit
   useEffect(() => {
@@ -124,9 +109,8 @@ export function LogsPage() {
 
   const handleClear = async () => {
     await window.api.proxyClearLogs()
-    setLogs([])
-    setTotalCount(0)
     setNewLogCount(0)
+    await reload()
   }
 
   const handleExport = () => {
@@ -196,7 +180,7 @@ export function LogsPage() {
           <Badge variant="secondary" className="text-[10px] font-mono">{totalCount.toLocaleString()}</Badge>
           {isLoading && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />}
         </div>
-        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={fetchLogs} title={isEn ? 'Refresh' : '刷新'}>
+        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void reload()} title={isEn ? 'Refresh' : '刷新'}>
           <RefreshCw className="h-3.5 w-3.5" />
         </Button>
         <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleExport} title={isEn ? 'Export' : '导出'}>

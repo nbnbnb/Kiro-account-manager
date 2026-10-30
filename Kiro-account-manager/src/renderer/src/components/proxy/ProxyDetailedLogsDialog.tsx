@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Button, Badge, Input } from '../ui'
 import { Trash2, RefreshCw, Download, Search, X, Copy, ChevronDown, ChevronUp, ChevronsDown, ArrowDown, Filter } from 'lucide-react'
 import { useTranslation } from '../../hooks/useTranslation'
+import { useProxyLogs } from '../../hooks/useProxyLogs'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
 interface LogEntry {
@@ -92,15 +93,12 @@ function CustomDropdown({ value, options, onChange, placeholder, className }: Cu
 export function ProxyDetailedLogsDialog({ open, onOpenChange }: ProxyDetailedLogsDialogProps) {
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [loading, setLoading] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [levelFilter, setLevelFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [newLogCount, setNewLogCount] = useState(0)
   const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set())
-  const prevLogCount = useRef(0)
   const [timeRange, setTimeRange] = useState<string>(() => {
     return localStorage.getItem('proxyLogs_timeRange') || 'all'
   })
@@ -108,41 +106,20 @@ export function ProxyDetailedLogsDialog({ open, onOpenChange }: ProxyDetailedLog
     return localStorage.getItem('proxyLogs_displayLimit') || 'all'
   })
   const scrollRef = useRef<HTMLDivElement>(null)
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  const loadLogs = useCallback(async () => {
-    try {
-      const result = await window.api.proxyGetLogs()
-      setLogs(result)
-    } catch (error) {
-      console.error('Failed to load logs:', error)
-    }
-  }, [])
+  // 供增量回调读取最新的"是否在底部"，避免把 isAtBottom 放进依赖导致轮询反复重建
+  const isAtBottomRef = useRef(true)
 
   useEffect(() => {
-    if (open) {
-      setLoading(true)
-      loadLogs().finally(() => setLoading(false))
-      
-      // 每 1.5 秒刷新一次
-      pollIntervalRef.current = setInterval(() => {
-        loadLogs().then(() => {
-          // 如果用户不在底部，累计新日志数
-          if (!isAtBottom && logs.length > prevLogCount.current) {
-            setNewLogCount(prev => prev + (logs.length - prevLogCount.current))
-          }
-          prevLogCount.current = logs.length
-        })
-      }, 1500)
-    }
+    isAtBottomRef.current = isAtBottom
+  }, [isAtBottom])
 
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-        pollIntervalRef.current = null
-      }
-    }
-  }, [open, loadLogs, isAtBottom, logs.length])
+  // 用户不在底部时累计新日志数
+  const handleAppend = useCallback((count: number) => {
+    if (!isAtBottomRef.current) setNewLogCount(prev => prev + count)
+  }, [])
+
+  // 对话框打开期间每 1.5 秒增量拉取（条数上限在下方 filteredLogs 中按 displayLimit 处理）
+  const { logs, loading, reload } = useProxyLogs({ enabled: open, limit: 0, onAppend: handleAppend })
 
   // 监听滚动位置判断是否在底部
   const handleScroll = useCallback(() => {
@@ -172,7 +149,8 @@ export function ProxyDetailedLogsDialog({ open, onOpenChange }: ProxyDetailedLog
   const handleClearLogs = async () => {
     try {
       await window.api.proxyClearLogs()
-      setLogs([])
+      setNewLogCount(0)
+      await reload()
     } catch (error) {
       console.error('Failed to clear logs:', error)
     }
@@ -472,7 +450,7 @@ export function ProxyDetailedLogsDialog({ open, onOpenChange }: ProxyDetailedLog
           <div className="h-5 w-px bg-border flex-shrink-0" />
 
           {/* 操作按钮 */}
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={loadLogs} disabled={loading}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => void reload()} disabled={loading}>
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </Button>
           <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleExportLogs} disabled={logs.length === 0}>

@@ -668,24 +668,11 @@ body {
   }
 }
 
-@property --angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-
-@keyframes rotate-gradient {
-  0% {
-    --angle: 0deg;
-  }
-  100% {
-    --angle: 360deg;
-  }
-}
-
 /* 流光边框 - 用 CSS mask 技术，只在 2px 边框圈上显示 conic 渐变
  * 卡片本体（content-box）完全保持 glass-card 的半透明磨砂效果
- * 不再污染卡片内部 */
+ * 不再污染卡片内部
+ * 性能：原先通过 @property --angle 无限旋转渐变，自定义属性动画无法交给合成器线程，
+ * 窗口可见期间每帧都要主线程重绘，现改为静态渐变描边 */
 .active-glow-border {
   position: relative;
   border-color: transparent !important; /* 覆盖 glass-card 的 1px 边框 */
@@ -698,7 +685,7 @@ body {
   padding: 2px; /* 这就是边框宽度 */
   border-radius: inherit; /* 跟随卡片圆角 (rounded-2xl = 24px) */
   background: conic-gradient(
-    from var(--angle),
+    from 0deg,
     var(--color-primary),
     #f472b6,
     #c084fc,
@@ -716,7 +703,6 @@ body {
     linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: rotate-gradient 3s linear infinite;
   pointer-events: none;
   z-index: 1; /* 浮在玻璃背景上方，确保始终可见 */
 }
@@ -762,6 +748,9 @@ body {
 }
 
 /* ==================== Glassmorphism 工具类 ==================== */
+/* 性能约定：backdrop-filter 只保留在侧边栏（.glass-sidebar）和对话框/弹出层（.glass-card-strong）。
+ * 每个 backdrop-filter 元素都是一个独立渲染面，背景一有变化（滚动、动画）就要重新取背景再模糊，
+ * 卡片、工具栏、页头下面只有平滑的渐变底色，模糊几乎看不出差别，因此只保留半透明底色。 */
 
 /* 账户卡片专用不透明背景（不受主题色渗色）
  * 用双 class 选择器提高特异性，覆盖 .glass-card / .glass-card-strong / .glass-card-subtle 的半透明背景
@@ -775,11 +764,9 @@ body {
   -webkit-backdrop-filter: none;
 }
 
-/* 标准玻璃卡片 */
+/* 标准玻璃卡片（半透明底色，不做背景模糊） */
 .glass-card {
   background-color: var(--glass-bg);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
 }
@@ -810,11 +797,9 @@ body {
   background-color: rgba(0, 0, 0, 0.5);
 }
 
-/* 轻玻璃 — 二级容器/工具栏 */
+/* 轻玻璃 — 二级容器/工具栏（半透明底色，不做背景模糊） */
 .glass-card-subtle {
   background-color: var(--glass-bg-subtle);
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
   border: 1px solid var(--glass-border);
 }
 
@@ -827,21 +812,20 @@ body {
   box-shadow: var(--glass-shadow);
 }
 
-/* 顶部透明工具栏 */
+/* 顶部透明工具栏（位于滚动区之上、不与内容重叠，不做背景模糊） */
 .glass-toolbar {
   background-color: var(--glass-bg-subtle);
-  backdrop-filter: blur(16px) saturate(150%);
-  -webkit-backdrop-filter: blur(16px) saturate(150%);
   border-bottom: 1px solid var(--glass-border);
 }
 
 /* ==================== 交互动画 ==================== */
 
-/* hover 浮起 + 阴影增强 */
+/* hover 浮起 + 阴影增强
+ * 不再常驻 will-change：每张卡片都会因此长期独占一个合成层（2x 缩放下显存占用明显），
+ * 过渡期间浏览器会自动临时提升图层，效果不变 */
 .hover-lift {
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
               box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  will-change: transform;
 }
 .hover-lift:hover {
   transform: translateY(-2px);
@@ -876,19 +860,9 @@ body {
   box-shadow: var(--glass-shadow-glow);
 }
 
-/* ==================== Ambient light 背景（主壳呼吸感） ==================== */
-
-@keyframes ambient-float-a {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33%      { transform: translate(40px, -30px) scale(1.1); }
-  66%      { transform: translate(-30px, 40px) scale(0.95); }
-}
-
-@keyframes ambient-float-b {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33%      { transform: translate(-50px, 30px) scale(1.05); }
-  66%      { transform: translate(30px, -40px) scale(0.9); }
-}
+/* ==================== Ambient light 背景（主壳氛围光） ==================== */
+/* 性能：两个大尺寸模糊光斑原先做 22s / 26s 无限漂浮动画，窗口可见期间每帧都要重新合成，
+ * 并连带其上所有毛玻璃区域重新模糊；现改为静态光斑，视觉基调不变，空闲时不再产生任何帧 */
 
 .ambient-bg {
   position: relative;
@@ -911,7 +885,6 @@ body {
   background: radial-gradient(circle, color-mix(in srgb, var(--gradient-from) 38%, transparent) 0%, transparent 70%);
   top: -240px;
   left: -160px;
-  animation: ambient-float-a 22s ease-in-out infinite;
 }
 .ambient-bg::after {
   width: 560px;
@@ -920,8 +893,6 @@ body {
   background: radial-gradient(circle, color-mix(in srgb, var(--gradient-to) 34%, transparent) 0%, transparent 70%);
   bottom: -240px;
   right: -160px;
-  animation: ambient-float-b 26s ease-in-out infinite;
-  animation-delay: -8s;
 }
 .dark .ambient-bg::before,
 .dark .ambient-bg::after {
@@ -934,27 +905,20 @@ body {
   z-index: 1;
 }
 
-/* ==================== 呼吸辉光（用于强调元素） ==================== */
-@keyframes breathe-glow {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(91, 140, 255, 0);
-  }
-  50% {
-    box-shadow: 0 0 0 6px rgba(91, 140, 255, 0.15), 0 0 24px rgba(91, 140, 255, 0.25);
-  }
-}
+/* ==================== 强调辉光（用于强调元素） ==================== */
+/* 性能：原先是 3s 无限循环的 box-shadow 呼吸动画（gradient 按钮默认带），box-shadow 动画
+ * 每帧都要重绘，页面上只要有一个这种按钮窗口就停不下来；现改为静态辉光，取原动画的中间强度 */
 .breathe-glow {
-  animation: breathe-glow 3s ease-in-out infinite;
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, 0.08), 0 0 12px rgba(91, 140, 255, 0.16);
 }
 
 /* ==================== Page Hero（统一的页面顶部视觉容器） ==================== */
+/* 底色已是 90% 不透明，背景模糊几乎不可见，去掉 backdrop-filter 以减少渲染面 */
 .page-hero {
   position: relative;
   overflow: hidden;
   border-radius: 1.5rem; /* 24px */
   background-color: var(--glass-bg-strong);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
 }
@@ -1013,4 +977,19 @@ body {
   opacity: 0.04;
   mix-blend-mode: overlay;
   border-radius: inherit;
+}
+
+/* ==================== 减少动态效果 ==================== */
+/* 系统关闭"动画效果"时（Windows：设置 → 辅助功能 → 视觉效果；远程桌面会话默认也会关闭），
+ * Chromium 会命中 prefers-reduced-motion: reduce。此时让所有 CSS 动画、过渡瞬间完成，
+ * 包括状态指示点的 ping/pulse 和加载图标的旋转；JS 驱动的 framer-motion 动画由 App 中的 MotionConfig 处理 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

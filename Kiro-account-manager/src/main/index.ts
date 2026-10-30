@@ -2178,11 +2178,11 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false,
-      // 关闭后台节流：最小化到托盘后窗口被隐藏，Chromium 默认会把渲染进程里的
-      // setInterval（含 token 自动刷新定时器）重度降频（对齐到约每分钟甚至更慢），
-      // 导致挂托盘时 token 过期好几分钟才刷新。关掉它保证定时器照常运行。
-      backgroundThrottling: false
+      nodeIntegration: false
+      // 后台节流保持默认开启：隐藏/最小化/被遮挡后页面不再被当作"可见"，定时器与动画会降频。
+      // - token 过期刷新由主进程 MainPoolRefresh 调度器负责（见 startMainPoolTokenRefresh），不依赖窗口状态；
+      // - 渲染进程的批量任务（如批量注册）运行期间，由渲染进程通过
+      //   'window-set-background-throttling' 临时关闭节流，任务结束后恢复。
     }
   })
 
@@ -2505,6 +2505,14 @@ app.whenReady().then(async () => {
   ipcMain.on('window-close', () => mainWindow?.close())
   ipcMain.handle('window-is-maximized', () => !!mainWindow?.isMaximized())
   ipcMain.handle('window-get-platform', () => process.platform)
+  // 渲染进程按任务中心状态切换后台节流：有进行中的批量任务时关闭，空闲时恢复
+  ipcMain.on('window-set-background-throttling', (event, allowed: unknown) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return
+    if (typeof allowed !== 'boolean') return
+    if (mainWindow.webContents.getBackgroundThrottling() === allowed) return
+    mainWindow.webContents.setBackgroundThrottling(allowed)
+    console.log(`[Window] Background throttling ${allowed ? 'enabled' : 'disabled'}`)
+  })
 
   // IPC: 获取显示主窗口快捷键
   ipcMain.handle('get-show-window-shortcut', () => {
@@ -6119,6 +6127,11 @@ app.whenReady().then(async () => {
       return proxyLogStore.getLast(count)
     }
     return proxyLogStore.getAll()
+  })
+
+  // IPC: 增量获取日志（日志页轮询用）：只返回 afterSeq 之后的新日志，没有新日志时 entries 为空
+  ipcMain.handle('proxy-get-logs-since', (_event, afterSeq: unknown, epoch: unknown, limit?: unknown) => {
+    return proxyLogStore.getSince(Number(afterSeq) || 0, Number(epoch), Number(limit) || 0)
   })
 
   // IPC: 清除反代日志

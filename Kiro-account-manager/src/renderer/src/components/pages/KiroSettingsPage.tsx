@@ -358,11 +358,11 @@ export function KiroSettingsPage() {
             </div>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={loadKiroSettings} className="bg-background/50 backdrop-blur-sm">
+            <Button variant="outline" size="sm" onClick={loadKiroSettings} className="bg-background/50">
               <RefreshCw className="h-4 w-4 mr-2" />
               {isEn ? 'Refresh' : '刷新'}
             </Button>
-            <Button variant="outline" size="sm" onClick={openKiroSettingsFile} className="bg-background/50 backdrop-blur-sm">
+            <Button variant="outline" size="sm" onClick={openKiroSettingsFile} className="bg-background/50">
               <ExternalLink className="h-4 w-4 mr-2" />
               {isEn ? 'Open File' : '打开设置文件'}
             </Button>

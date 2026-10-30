@@ -12,7 +12,7 @@ const buttonVariants = cva(
         // 危险操作：红色 + hover 红色辉光
         destructive: 'bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90 hover:-translate-y-px hover:shadow-[0_0_0_1px_rgba(239,68,68,0.25),0_8px_24px_rgba(239,68,68,0.25)]',
         // 玻璃 outline：默认无填充，hover 显示淡色 + 浮起
-        outline: 'border border-[var(--glass-border-strong)] bg-[var(--glass-bg-subtle)] backdrop-blur-md shadow-sm hover:bg-[var(--glass-bg)] hover:text-foreground hover:-translate-y-px',
+        outline: 'border border-[var(--glass-border-strong)] bg-[var(--glass-bg-subtle)] shadow-sm hover:bg-[var(--glass-bg)] hover:text-foreground hover:-translate-y-px',
         // secondary：玻璃感
         secondary: 'bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80 hover:-translate-y-px',
         // ghost：透明，hover 显示淡色背景

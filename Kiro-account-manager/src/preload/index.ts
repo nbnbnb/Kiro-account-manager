@@ -657,6 +657,23 @@ const api = {
     return ipcRenderer.invoke('proxy-get-logs-count')
   },
 
+  /**
+   * 增量获取日志：只返回序号大于 afterSeq 的新日志。
+   * 首次拉取传 afterSeq=0、epoch=-1；返回 reset=true 时应整体替换本地列表，否则追加。
+   * @param afterSeq 本地已持有的最新序号
+   * @param epoch 本地持有的日志代际号（主进程清空日志后会变化）
+   * @param limit 本地最多保留的条数，0 或不传表示不限制
+   */
+  proxyGetLogsSince: (afterSeq: number, epoch: number, limit?: number): Promise<{
+    entries: Array<{ timestamp: string; level: string; category: string; message: string; data?: unknown }>
+    lastSeq: number
+    epoch: number
+    total: number
+    reset: boolean
+  }> => {
+    return ipcRenderer.invoke('proxy-get-logs-since', afterSeq, epoch, limit)
+  },
+
   // 更新反代服务器配置
   proxyUpdateConfig: (config: Record<string, unknown>): Promise<{ success: boolean; config?: unknown; error?: string }> => {
     return ipcRenderer.invoke('proxy-update-config', config)
@@ -1040,7 +1057,13 @@ const api = {
       const handler = (_event: any, isMaximized: boolean): void => callback(isMaximized)
       ipcRenderer.on('window-maximize-changed', handler)
       return () => ipcRenderer.removeListener('window-maximize-changed', handler)
-    }
+    },
+    /**
+     * 设置主窗口是否允许后台节流。
+     * @param allowed true 表示窗口隐藏/最小化后允许 Chromium 降频定时器与动画（默认）；
+     *                false 表示保持全速运行，仅在有进行中的批量任务时使用
+     */
+    setBackgroundThrottling: (allowed: boolean): void => ipcRenderer.send('window-set-background-throttling', allowed)
   },
 
   // ============ 托盘相关 API ============

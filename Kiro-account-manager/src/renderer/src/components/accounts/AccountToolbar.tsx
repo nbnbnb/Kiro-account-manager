@@ -313,7 +313,7 @@ export function AccountToolbar({
           <input
             type="text"
             placeholder={isEn ? 'Search accounts...' : '搜索账号...'}
-            className="w-full pl-9 pr-4 py-2 text-sm rounded-xl bg-[var(--glass-bg-subtle)] backdrop-blur-md border border-[var(--glass-border)] focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/30 transition-all"
+            className="w-full pl-9 pr-4 py-2 text-sm rounded-xl bg-[var(--glass-bg-subtle)] border border-[var(--glass-border)] focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/30 transition-all"
             value={filter.search ?? ''}
             onChange={(e) => handleSearch(e.target.value)}
           />
@@ -322,7 +322,7 @@ export function AccountToolbar({
         {/* 主要操作按钮 - 右对齐 */}
         <div className="flex items-center gap-2 ml-auto">
           {/* 视图切换 (卡片 / 列表) */}
-          <div className="flex items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md overflow-hidden">
+          <div className="flex items-center rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] overflow-hidden">
             <button
               type="button"
               onClick={() => onViewModeChange('grid')}

@@ -999,7 +999,7 @@ export function AddAccountDialog({ isOpen, onClose }: AddAccountDialogProps): Re
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
-      <Card className="relative w-full max-w-lg max-h-[90vh] overflow-auto z-10">
+      <Card variant="glass-strong" className="relative w-full max-w-lg max-h-[90vh] overflow-auto z-10">
         <CardHeader className="pb-4 border-b">
           <div className="flex flex-row items-center justify-between">
             <CardTitle className="text-xl font-bold">{isEn ? 'Add Account' : '添加账号'}</CardTitle>

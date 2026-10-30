@@ -716,7 +716,7 @@ export function ProxyPoolPage(): React.ReactNode {
                     const ep = IP_DETECT_ENDPOINTS.find(ep => ep.id === e.target.value)
                     if (ep) setProxyPoolConfig({ testUrl: ep.url })
                   }}
-                  className="h-8 text-xs rounded-lg border border-foreground/15 bg-[var(--glass-bg)] backdrop-blur-md px-2 flex-shrink-0"
+                  className="h-8 text-xs rounded-lg border border-foreground/15 bg-[var(--glass-bg)] px-2 flex-shrink-0"
                 >
                   {IP_DETECT_ENDPOINTS.map(ep => (
                     <option key={ep.id} value={ep.id}>{ep.label}</option>

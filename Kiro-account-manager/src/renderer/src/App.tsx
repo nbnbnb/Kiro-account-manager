@@ -4,6 +4,7 @@ import { AccountManager } from './components/accounts'
 import { Sidebar, TitleBar, type PageType } from './components/layout'
 import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, ProxyPage, KProxyPage, ProxyPoolPage, WebhooksPage, DiagnosePage, ConfigSyncPage, RegisterPage, SubscriptionPage, LogsPage } from './components/pages'
 import { useWebhookStore } from './store/webhooks'
+import { useTaskStore } from './store/tasks'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
 import { useAccountsStore, isBannedAccountError } from './store/accounts'
@@ -85,6 +86,19 @@ function App(): React.JSX.Element {
       }
     }, TRAY_UPDATE_DEBOUNCE_MS)
   }, [])
+
+  // 后台节流开关：主窗口默认开启节流，隐藏/最小化后 Chromium 会降频定时器与动画以节省资源。
+  // 任务中心有进行中（running / paused）的任务时临时关闭节流——批量注册等任务在渲染进程里
+  // 靠定时器排队，窗口挂托盘 5 分钟后定时器会被对齐到约 1 分钟一次，导致任务被拖慢。
+  const hasActiveTasks = useTaskStore((state) => {
+    for (const task of state.tasks.values()) {
+      if (task.status === 'running' || task.status === 'paused') return true
+    }
+    return false
+  })
+  useEffect(() => {
+    window.api.window.setBackgroundThrottling(!hasActiveTasks)
+  }, [hasActiveTasks])
 
   // 应用启动时加载数据并启动自动刷新
   useEffect(() => {

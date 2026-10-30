@@ -236,7 +236,7 @@ export function MachineIdPage() {
                 </p>
               </div>
             </div>
-            <Badge variant="outline" className="bg-background/80 backdrop-blur-sm">
+            <Badge variant="outline" className="bg-background/80">
               <Monitor className="h-3 w-3 mr-1" />
               {getOSName()}
             </Badge>
@@ -244,7 +244,7 @@ export function MachineIdPage() {
 
           {/* 统计卡片 */}
           <div className="grid grid-cols-3 gap-4 mt-6">
-            <div className="p-4 rounded-xl bg-background/60 backdrop-blur-sm border border-white/10">
+            <div className="p-4 rounded-xl bg-background/60 border border-white/10">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-primary/10">
                   <Fingerprint className="h-4 w-4 text-primary" />
@@ -255,7 +255,7 @@ export function MachineIdPage() {
                 </div>
               </div>
             </div>
-            <div className="p-4 rounded-xl bg-background/60 backdrop-blur-sm border border-white/10">
+            <div className="p-4 rounded-xl bg-background/60 border border-white/10">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-primary/10">
                   <Link2 className="h-4 w-4 text-primary" />
@@ -266,7 +266,7 @@ export function MachineIdPage() {
                 </div>
               </div>
             </div>
-            <div className="p-4 rounded-xl bg-background/60 backdrop-blur-sm border border-white/10">
+            <div className="p-4 rounded-xl bg-background/60 border border-white/10">
               <div className="flex items-center gap-3">
                 <div className="p-2 rounded-lg bg-primary/10">
                   <Shield className="h-4 w-4 text-primary" />

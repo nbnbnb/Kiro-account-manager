@@ -4,12 +4,30 @@ import * as path from 'path'
 import { app } from 'electron'
 import { redactString, redactValue } from '../utils/redact'
 
+// 模块加载时（早于 interceptConsole）保存原始 console.error：日志存储自身出错时用它输出，
+// 避免错误信息再次进入日志存储，形成"写盘失败 → 记日志 → 再写盘"的循环
+const rawConsoleError = console.error.bind(console)
+
 export interface LogEntry {
   timestamp: string
   level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
   category: string
   message: string
   data?: unknown
+}
+
+/** 增量拉取日志（proxy-get-logs-since）的返回结构 */
+export interface LogsSinceResult {
+  /** 本次返回的日志，按时间正序 */
+  entries: LogEntry[]
+  /** 当前最新一条日志的序号，客户端下次拉取时作为 afterSeq 传回 */
+  lastSeq: number
+  /** 日志存储代际号，每次清空日志后递增 */
+  epoch: number
+  /** 内存中保留的日志总条数 */
+  total: number
+  /** true：客户端应丢弃本地列表、用 entries 整体替换；false：把 entries 追加到本地列表末尾 */
+  reset: boolean
 }
 
 export interface LoggerConfig {
@@ -27,6 +45,46 @@ const DEFAULT_CONFIG: LoggerConfig = {
   logToConsole: true
 }
 
+/** 单条日志消息、字符串数据的最大保留长度 */
+const MAX_LOG_TEXT_LENGTH = 4000
+/** 单条日志附带数据序列化后的最大长度，超出则改存截断后的 JSON 文本 */
+const MAX_LOG_DATA_JSON_LENGTH = 16 * 1024
+
+/** 超长文本截断，并注明被截掉的字符数 */
+function truncateText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…[truncated ${text.length - max} chars]` : text
+}
+
+/**
+ * 脱敏并截断日志文本。
+ * 先脱敏再截断，避免截断点把 token 切成半截导致脱敏规则失配；超长文本只取前 2 倍上限参与脱敏，控制正则开销。
+ * @param text 原始文本
+ * @returns 脱敏且长度不超过上限（另加截断说明）的文本
+ */
+export function sanitizeLogText(text: string): string {
+  if (text.length <= MAX_LOG_TEXT_LENGTH) return redactString(text)
+  const head = redactString(text.slice(0, MAX_LOG_TEXT_LENGTH * 2)).slice(0, MAX_LOG_TEXT_LENGTH)
+  return `${head}…[truncated ${text.length - MAX_LOG_TEXT_LENGTH} chars]`
+}
+
+/**
+ * 规整日志附带数据：脱敏、限制体积，并生成与调用方对象无关的副本，避免日志长期持有调用方的大对象引用。
+ * @param data 调用方传入的任意数据
+ * @returns 可安全序列化、体积受限的数据（基础类型、脱敏后的普通对象，或截断后的 JSON 文本）
+ */
+export function sanitizeLogData(data: unknown): unknown {
+  if (data === undefined || data === null) return data
+  if (typeof data === 'string') return sanitizeLogText(data)
+  const redacted = redactValue(data)
+  if (redacted === null || typeof redacted !== 'object') return redacted
+  try {
+    const json = JSON.stringify(redacted)
+    return json.length > MAX_LOG_DATA_JSON_LENGTH ? truncateText(json, MAX_LOG_DATA_JSON_LENGTH) : redacted
+  } catch {
+    return '[unserializable]'
+  }
+}
+
 class ProxyLogger {
   private config: LoggerConfig
   private logStream: fs.WriteStream | null = null
@@ -39,7 +97,7 @@ class ProxyLogger {
 
   configure(config: Partial<LoggerConfig>): void {
     this.config = { ...this.config, ...config }
-    
+
     if (this.config.enabled && !this.config.logDir) {
       // 默认日志目录
       this.config.logDir = path.join(app.getPath('userData'), 'logs', 'proxy')
@@ -108,11 +166,11 @@ class ProxyLogger {
 
   private isWriting = false
   private write(rawEntry: LogEntry): void {
-    // 统一脱敏：message + data 里的代理账密 / token / password 等，避免明文落盘或上屏
+    // 统一脱敏并限制体积：message + data 里的代理账密 / token / password 等，避免明文落盘或上屏
     const entry: LogEntry = {
       ...rawEntry,
-      message: redactString(rawEntry.message),
-      data: rawEntry.data === undefined ? undefined : redactValue(rawEntry.data)
+      message: sanitizeLogText(rawEntry.message),
+      data: rawEntry.data === undefined ? undefined : sanitizeLogData(rawEntry.data)
     }
     const line = JSON.stringify(entry) + '\n'
 
@@ -228,85 +286,268 @@ class ProxyLogger {
   }
 }
 
+/** 内存中最多保留的日志条数（5 万条 × 平均约 200 字节 ≈ 10 MB） */
+const MAX_LOGS = 50000
+/** 追加写盘间隔：期间产生的日志合并成一次追加写 */
+const FLUSH_INTERVAL_MS = 5000
+/** 单个日志文件的大小上限，超过后轮转为 .1 文件，磁盘上最多保留两份 */
+const MAX_LOG_FILE_BYTES = 5 * 1024 * 1024
+
+/** 校验从磁盘读回的日志条目结构，过滤损坏或旧版本遗留的无效数据 */
+function isValidLogEntry(value: unknown): value is LogEntry {
+  if (!value || typeof value !== 'object') return false
+  const log = value as Partial<LogEntry>
+  return typeof log.timestamp === 'string' && !isNaN(new Date(log.timestamp).getTime()) &&
+    typeof log.level === 'string' && !!log.level &&
+    typeof log.category === 'string' && !!log.category &&
+    typeof log.message === 'string'
+}
+
+/** 把一批日志序列化为 NDJSON 文本；个别条目无法序列化时丢弃其 data 字段 */
+function serializeBatch(batch: LogEntry[]): string {
+  let out = ''
+  for (const entry of batch) {
+    let line: string
+    try {
+      line = JSON.stringify(entry)
+    } catch {
+      line = JSON.stringify({ ...entry, data: '[unserializable]' })
+    }
+    out += line + '\n'
+  }
+  return out
+}
+
+/** 固定容量的环形缓冲区：写入 O(1)，写满后覆盖最旧的条目 */
+class LogRingBuffer {
+  private items: Array<LogEntry | undefined>
+  /** 最旧条目所在下标 */
+  private head = 0
+  private length = 0
+
+  constructor(private readonly capacity: number) {
+    this.items = new Array(capacity)
+  }
+
+  /** 当前保存的条目数 */
+  get size(): number {
+    return this.length
+  }
+
+  /** 追加一条日志，已满时覆盖最旧的一条 */
+  push(entry: LogEntry): void {
+    if (this.length < this.capacity) {
+      this.items[(this.head + this.length) % this.capacity] = entry
+      this.length++
+    } else {
+      this.items[this.head] = entry
+      this.head = (this.head + 1) % this.capacity
+    }
+  }
+
+  /** 按时间正序返回最新的 count 条 */
+  last(count: number): LogEntry[] {
+    const n = Math.max(0, Math.min(count, this.length))
+    const out: LogEntry[] = new Array(n)
+    const start = this.head + this.length - n
+    for (let i = 0; i < n; i++) {
+      out[i] = this.items[(start + i) % this.capacity] as LogEntry
+    }
+    return out
+  }
+
+  /** 清空全部条目 */
+  clear(): void {
+    this.items = new Array(this.capacity)
+    this.head = 0
+    this.length = 0
+  }
+}
+
 // 内存日志存储（用于 UI 显示）
 //
-// 性能修复要点：
-// 1. maxLogs 从 100万 降至 5万 — 避免序列化数百 MB 大对象阻塞主进程
-// 2. save() 改为异步 fs.promises.writeFile — 不再 freeze 主进程事件循环
-// 3. 单次写盘原子化（in-flight guard）防止并发 writeFile 导致竞态
-// 4. 写盘节流间隔从 5s 提至 30s — 大幅降低高频日志场景下的 IO 频率
-// 5. 应用退出时通过 flushSaveNow() 强制写盘，防止数据丢失
+// 性能设计：
+// 1. 内存用固定容量环形缓冲区，写满后覆盖最旧条目，单条写入 O(1)
+//    （旧实现到上限后每条日志都要复制整个 5 万元素数组）
+// 2. 落盘改为追加写 NDJSON：每 FLUSH_INTERVAL_MS 把新增日志合并成一次 appendFile，
+//    单文件超过 MAX_LOG_FILE_BYTES 轮转为 .1，磁盘上最多两份
+//    （旧实现每 30 秒把整个数组同步 JSON.stringify 后整文件重写，满载约 10 MB，会卡住主进程）
+// 3. 每条日志带单调递增序号，UI 通过 getSince 只拉取新增部分，清空日志时 epoch 递增通知 UI 整体重载
+// 4. 所有文件操作串行执行，避免追加、轮转、清空互相穿插；应用退出时通过 flushSaveNow() 强制落盘
 class ProxyLogStore {
-  private logs: LogEntry[] = []
-  // 5 万条 × 平均 200 字节 ≈ 10 MB；既能覆盖常规调试需求，又把单次写盘成本控制在可接受范围内
-  private maxLogs: number = 50000
+  private ring = new LogRingBuffer(MAX_LOGS)
+  /** 下一条日志的序号（从 1 开始单调递增，清空日志也不重置） */
+  private nextSeq = 1
+  /** 存储代际号，每次清空日志后递增 */
+  private epoch = 0
   private listeners: ((entry: LogEntry) => void)[] = []
-  private storePath: string = ''
 
   private initialized = false
+  private filePath = ''
+  private rotatedFilePath = ''
+  /** 旧版整文件 JSON 日志路径（迁移后删除） */
+  private legacyFilePath = ''
+  private legacyFilePending = false
+  private currentFileBytes = 0
+  /** 等待追加写盘的日志 */
+  private pending: LogEntry[] = []
+  private flushTimer: NodeJS.Timeout | null = null
+  /** 串行化所有文件操作 */
+  private ioQueue: Promise<void> = Promise.resolve()
+
+  /**
+   * 初始化存储位置并载入历史日志（同步执行，只在启动时调用一次）。
+   * @param userDataPath 应用 userData 目录
+   */
   initialize(userDataPath: string): void {
     if (this.initialized) return
     this.initialized = true
-    this.storePath = path.join(userDataPath, 'proxy-logs.json')
-    this.load()
+    this.filePath = path.join(userDataPath, 'proxy-logs.ndjson')
+    this.rotatedFilePath = path.join(userDataPath, 'proxy-logs.1.ndjson')
+    this.legacyFilePath = path.join(userDataPath, 'proxy-logs.json')
+
+    const { entries: history, migrated } = this.loadHistory()
+    // 初始化前已产生的日志（如有）排在磁盘历史之后
+    const early = this.ring.last(this.ring.size)
+    this.ring.clear()
+    for (const entry of history) this.ring.push(entry)
+    for (const entry of early) this.ring.push(entry)
+    this.nextSeq = 1 + history.length + early.length
+    // 从旧格式迁移时，把历史日志一并写入新文件
+    if (migrated) this.pending = history.concat(this.pending)
+    console.log(`[ProxyLogStore] Loaded ${history.length} logs${migrated ? ' (migrated from proxy-logs.json)' : ''}`)
+    if (this.pending.length > 0) this.scheduleFlush()
   }
 
-  private load(): void {
-    try {
-      if (fs.existsSync(this.storePath)) {
-        const data = fs.readFileSync(this.storePath, 'utf-8')
-        const parsed = JSON.parse(data)
-        // 验证并过滤有效的日志条目
-        const filtered = Array.isArray(parsed) ? parsed.filter((log: LogEntry) => {
-          if (!log.timestamp || isNaN(new Date(log.timestamp).getTime())) return false
-          if (!log.level || !log.category) return false
-          return true
-        }) : []
-        // 加载时也施加上限，避免旧版本遗留的超大日志文件导致首次启动卡顿
-        this.logs = filtered.length > this.maxLogs ? filtered.slice(-this.maxLogs) : filtered
-        console.log(`[ProxyLogStore] Loaded ${this.logs.length} valid logs`)
+  /** 读取磁盘上的历史日志：优先新格式 NDJSON，其次迁移旧版 proxy-logs.json */
+  private loadHistory(): { entries: LogEntry[]; migrated: boolean } {
+    if (fs.existsSync(this.filePath) || fs.existsSync(this.rotatedFilePath)) {
+      const entries = this.readNdjson(this.rotatedFilePath).concat(this.readNdjson(this.filePath))
+      try {
+        this.currentFileBytes = fs.statSync(this.filePath).size
+      } catch {
+        this.currentFileBytes = 0
       }
-    } catch (error) {
-      console.error('[ProxyLogStore] Failed to load logs:', error)
-      this.logs = []
+      // 新格式已存在时旧文件只是残留，下次写盘后顺带删除
+      this.legacyFilePending = fs.existsSync(this.legacyFilePath)
+      return { entries: entries.length > MAX_LOGS ? entries.slice(-MAX_LOGS) : entries, migrated: false }
     }
-  }
-
-  /** 异步保存日志（不阻塞主进程事件循环）。并发调用通过 in-flight 标志合并。 */
-  private writeInFlight = false
-  private writePending = false
-
-  async save(): Promise<void> {
-    if (this.writeInFlight) {
-      // 已有写盘进行中：标记 pending，让其完成后立即重写最新数据
-      this.writePending = true
-      return
-    }
-    this.writeInFlight = true
-    try {
-      // 拷贝引用快照（不复制数组）以保证 JSON.stringify 期间数据稳定
-      const snapshot = this.logs
-      await fs.promises.writeFile(this.storePath, JSON.stringify(snapshot), 'utf-8')
-    } catch (error) {
-      console.error('[ProxyLogStore] Failed to save logs:', error)
-    } finally {
-      this.writeInFlight = false
-      if (this.writePending) {
-        this.writePending = false
-        // 用 microtask 而不是立即递归，避免栈深问题
-        queueMicrotask(() => { void this.save() })
+    if (fs.existsSync(this.legacyFilePath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(this.legacyFilePath, 'utf-8'))
+        const entries = Array.isArray(parsed) ? parsed.filter(isValidLogEntry) : []
+        this.legacyFilePending = true
+        return { entries: entries.length > MAX_LOGS ? entries.slice(-MAX_LOGS) : entries, migrated: true }
+      } catch (error) {
+        // 旧文件损坏时保留原文件不动，从空日志开始
+        rawConsoleError('[ProxyLogStore] Failed to load legacy logs:', error)
       }
     }
+    return { entries: [], migrated: false }
   }
 
-  private saveTimer: NodeJS.Timeout | null = null
+  /** 逐行解析 NDJSON 日志文件，跳过崩溃时可能残留的半行或损坏行 */
+  private readNdjson(file: string): LogEntry[] {
+    let text: string
+    try {
+      text = fs.readFileSync(file, 'utf-8')
+    } catch {
+      return []
+    }
+    const entries: LogEntry[] = []
+    for (const line of text.split('\n')) {
+      if (!line) continue
+      try {
+        const entry = JSON.parse(line)
+        if (isValidLogEntry(entry)) entries.push(entry)
+      } catch {
+        // 跳过损坏行
+      }
+    }
+    return entries
+  }
 
+  /** 在文件操作队列末尾追加任务，保证追加、轮转、清空按调用顺序串行执行 */
+  private enqueueIo(task: () => Promise<void>): Promise<void> {
+    const run = this.ioQueue.then(task).catch((error) => {
+      rawConsoleError('[ProxyLogStore] Log file operation failed:', error)
+    })
+    this.ioQueue = run
+    return run
+  }
+
+  private scheduleFlush(): void {
+    if (!this.initialized || this.flushTimer) return
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null
+      void this.flush()
+    }, FLUSH_INTERVAL_MS)
+  }
+
+  /** 把待写日志以 NDJSON 追加到当前文件末尾（异步、串行） */
+  private flush(): Promise<void> {
+    if (!this.initialized) return Promise.resolve()
+    return this.enqueueIo(async () => {
+      if (this.pending.length === 0) return
+      const batch = this.pending
+      this.pending = []
+      const chunk = serializeBatch(batch)
+      const bytes = Buffer.byteLength(chunk)
+      try {
+        if (this.currentFileBytes > 0 && this.currentFileBytes + bytes > MAX_LOG_FILE_BYTES) {
+          await this.rotate()
+        }
+        await fs.promises.appendFile(this.filePath, chunk, 'utf-8')
+        this.currentFileBytes += bytes
+      } catch (error) {
+        // 写盘失败：放回队首等待下次重试，最多保留 MAX_LOGS 条，避免磁盘持续异常时无限堆积
+        const merged = batch.concat(this.pending)
+        this.pending = merged.length > MAX_LOGS ? merged.slice(-MAX_LOGS) : merged
+        rawConsoleError('[ProxyLogStore] Failed to append logs:', error)
+        this.scheduleFlush()
+        return
+      }
+      if (this.legacyFilePending) {
+        this.legacyFilePending = false
+        await fs.promises.rm(this.legacyFilePath, { force: true })
+      }
+    })
+  }
+
+  /** 当前文件写满后轮转：current → .1（覆盖旧的 .1），之后从空文件继续追加 */
+  private async rotate(): Promise<void> {
+    try {
+      await fs.promises.rename(this.filePath, this.rotatedFilePath)
+    } catch {
+      // 重命名失败（如 .1 被其他程序占用）时直接截断当前文件，保证磁盘占用有上限
+      await fs.promises.writeFile(this.filePath, '', 'utf-8').catch(() => undefined)
+    }
+    this.currentFileBytes = 0
+  }
+
+  /**
+   * 强制立即把待写日志落盘（应用退出时调用）。
+   * @returns 写盘完成（或失败已记录）后 resolve
+   */
+  async flushSaveNow(): Promise<void> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+    await this.flush()
+  }
+
+  /**
+   * 追加一条日志：写入内存、通知监听器，并安排一次批量追加写盘。
+   * @param entry 已脱敏的日志条目
+   */
   add(entry: LogEntry): void {
-    this.logs.push(entry)
-
-    // 超过最大数量时删除最旧的
-    if (this.logs.length > this.maxLogs) {
-      this.logs = this.logs.slice(-this.maxLogs)
+    this.ring.push(entry)
+    this.nextSeq++
+    this.pending.push(entry)
+    // 仅在写盘持续失败时才会触发，按 1.2 倍阈值批量裁剪，避免每条日志都复制数组
+    if (this.pending.length > MAX_LOGS * 1.2) {
+      this.pending = this.pending.slice(-MAX_LOGS)
     }
 
     // 通知监听器（异常隔离）
@@ -314,44 +555,81 @@ class ProxyLogStore {
       try { listener(entry) } catch { /* ignore */ }
     }
 
-    // 节流调度异步保存
-    this.scheduleSave()
+    this.scheduleFlush()
   }
 
-  private scheduleSave(): void {
-    if (this.saveTimer) return  // 已调度，等待 flush
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null
-      void this.save()
-    }, 30_000) // 30 秒批量写盘一次（异步、不阻塞）
-  }
-
-  /** 强制立即写盘（用于退出场景），保证最新数据落盘 */
-  async flushSaveNow(): Promise<void> {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer)
-      this.saveTimer = null
-    }
-    await this.save()
-  }
-
+  /**
+   * 获取内存中保留的全部日志。
+   * @returns 按时间正序排列的日志副本
+   */
   getAll(): LogEntry[] {
-    return [...this.logs]
+    return this.ring.last(this.ring.size)
   }
 
+  /**
+   * 获取最新的若干条日志。
+   * @param count 需要的条数
+   * @returns 按时间正序排列的日志
+   */
   getLast(count: number): LogEntry[] {
-    return this.logs.slice(-count)
+    return this.ring.last(count)
   }
 
+  /**
+   * 增量获取日志：只返回序号大于 afterSeq 的部分。
+   * 客户端首次拉取、epoch 不一致、落后超过内存保留范围或新增条数超过 limit 时，
+   * 返回最近 limit 条并置 reset=true，由客户端整体替换。
+   * @param afterSeq 客户端已持有的最新序号，首次拉取传 0
+   * @param epoch 客户端持有的代际号，首次拉取传 -1
+   * @param limit 客户端最多保留的条数，0 表示不限制
+   * @returns 增量结果
+   */
+  getSince(afterSeq: number, epoch: number, limit = 0): LogsSinceResult {
+    const total = this.ring.size
+    const lastSeq = this.nextSeq - 1
+    const oldestSeq = lastSeq - total + 1
+    const max = limit > 0 ? Math.min(limit, total) : total
+    let reset = epoch !== this.epoch || afterSeq <= 0 || afterSeq > lastSeq || afterSeq < oldestSeq - 1
+    let count = reset ? max : lastSeq - afterSeq
+    if (!reset && count > max) {
+      reset = true
+      count = max
+    }
+    return { entries: this.ring.last(count), lastSeq, epoch: this.epoch, total, reset }
+  }
+
+  /** 清空内存与磁盘上的日志，并递增 epoch 通知增量拉取的客户端整体重载 */
   clear(): void {
-    this.logs = []
-    void this.save()
+    this.ring.clear()
+    this.pending = []
+    this.epoch++
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+    if (!this.initialized) return
+    void this.enqueueIo(async () => {
+      await Promise.all(
+        [this.filePath, this.rotatedFilePath, this.legacyFilePath].map((file) => fs.promises.rm(file, { force: true }))
+      )
+      this.legacyFilePending = false
+      this.currentFileBytes = 0
+    })
   }
 
+  /**
+   * 当前内存中保留的日志条数。
+   * @returns 条数
+   */
   count(): number {
-    return this.logs.length
+    return this.ring.size
   }
 
+  /**
+   * 订阅新增日志。
+   * @param listener 每条新日志写入后调用
+   * @returns 取消订阅函数
+   */
   onLog(listener: (entry: LogEntry) => void): () => void {
     this.listeners.push(listener)
     return () => {
@@ -405,7 +683,14 @@ export function interceptConsole(): void {
       const allStrings = rest.every(r => typeof r === 'string')
       data = allStrings ? (rest as string[]).join(' ') : rest
     }
-    return { timestamp: new Date().toISOString(), level, category, message, data }
+    // 与 ProxyLogger 一致：脱敏 + 限制体积，且不再直接引用调用方传入的对象
+    return {
+      timestamp: new Date().toISOString(),
+      level,
+      category,
+      message: sanitizeLogText(message),
+      data: sanitizeLogData(data)
+    }
   }
 
   console.log = (...args: unknown[]) => {

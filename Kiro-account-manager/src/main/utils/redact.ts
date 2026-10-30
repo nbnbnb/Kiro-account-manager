@@ -67,28 +67,56 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEYS.some((s) => k === s.replace(/[_-]/g, '') || k.includes(s.replace(/[_-]/g, '')))
 }
 
-/** 递归脱敏任意值（对象/数组/字符串）。maxDepth 防御过深结构与循环引用 */
+/** 单个数组/对象最多保留的元素数，防止超大结构拖慢脱敏与日志写入 */
+const MAX_COLLECTION_ITEMS = 200
+
+/**
+ * 递归脱敏任意值（对象/数组/字符串），返回与输入无引用关系的副本。
+ * - maxDepth 防御过深结构与循环引用；超大数组/对象只保留前 MAX_COLLECTION_ITEMS 项
+ * - 二进制数据只保留类型与字节数，Date 转 ISO 字符串，Error 显式保留 name/message/stack（它们不可枚举）
+ * @param value 任意待脱敏的值
+ * @param maxDepth 剩余可展开深度
+ * @param seen 已访问对象集合，用于识别循环引用
+ * @returns 脱敏后的值
+ */
 export function redactValue(value: unknown, maxDepth = 6, seen = new WeakSet<object>()): unknown {
   if (value == null) return value
   if (typeof value === 'string') return redactString(value)
   if (typeof value === 'number' || typeof value === 'boolean') return value
+  if (typeof value === 'bigint') return value.toString()
+  if (typeof value !== 'object') return String(value)
+  // 二进制数据逐字节展开成对象代价极高，只记录类型与长度
+  if (ArrayBuffer.isView(value)) return `[${value.constructor?.name ?? 'Binary'} ${value.byteLength} bytes]`
+  if (value instanceof ArrayBuffer) return `[ArrayBuffer ${value.byteLength} bytes]`
+  if (value instanceof Date) return isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString()
   if (maxDepth <= 0) return '[depth-limit]'
+  if (seen.has(value)) return '[circular]'
+  seen.add(value)
+
+  if (value instanceof Map) return redactValue(Object.fromEntries(value), maxDepth - 1, seen)
+  if (value instanceof Set) return redactValue(Array.from(value), maxDepth - 1, seen)
 
   if (Array.isArray(value)) {
-    return value.map((v) => redactValue(v, maxDepth - 1, seen))
-  }
-  if (typeof value === 'object') {
-    if (seen.has(value as object)) return '[circular]'
-    seen.add(value as object)
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (isSensitiveKey(k)) {
-        out[k] = typeof v === 'string' ? maskMiddle(v) : '***'
-      } else {
-        out[k] = redactValue(v, maxDepth - 1, seen)
-      }
-    }
+    const out = value.slice(0, MAX_COLLECTION_ITEMS).map((v) => redactValue(v, maxDepth - 1, seen))
+    if (value.length > MAX_COLLECTION_ITEMS) out.push(`[+${value.length - MAX_COLLECTION_ITEMS} more items]`)
     return out
   }
-  return value
+
+  const out: Record<string, unknown> = {}
+  if (value instanceof Error) {
+    out.name = value.name
+    out.message = redactString(value.message)
+    if (value.stack) out.stack = redactString(value.stack)
+  }
+  const keys = Object.keys(value)
+  for (const k of keys.length > MAX_COLLECTION_ITEMS ? keys.slice(0, MAX_COLLECTION_ITEMS) : keys) {
+    const v = (value as Record<string, unknown>)[k]
+    if (isSensitiveKey(k)) {
+      out[k] = typeof v === 'string' ? maskMiddle(v) : '***'
+    } else {
+      out[k] = redactValue(v, maxDepth - 1, seen)
+    }
+  }
+  if (keys.length > MAX_COLLECTION_ITEMS) out['…'] = `[+${keys.length - MAX_COLLECTION_ITEMS} more keys]`
+  return out
 }

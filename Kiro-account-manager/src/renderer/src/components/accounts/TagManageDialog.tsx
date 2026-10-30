@@ -149,7 +149,7 @@ export function TagManageDialog({ isOpen, onClose }: TagManageDialogProps): Reac
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
-      <Card className="relative w-full max-w-2xl max-h-[85vh] overflow-hidden z-10 flex flex-col">
+      <Card variant="glass-strong" className="relative w-full max-w-2xl max-h-[85vh] overflow-hidden z-10 flex flex-col">
         <CardHeader className="flex flex-row items-center justify-between pb-2 shrink-0">
           <CardTitle className="flex items-center gap-2">
             <Tag className="h-5 w-5" />
