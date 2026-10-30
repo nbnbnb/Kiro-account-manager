@@ -1,0 +1,68 @@
+Kiro-account-manager/src/renderer/src/components/accounts/GroupManageDialog.tsx
+  s_6e91bb7a6c261a::t_b3ebe1e898e810 110
+Kiro-account-manager/src/renderer/src/styles/globals.css
+  s_6e91bb7a6c261a::t_2a0cbd31e70c38 673-675
+  s_6e91bb7a6c261a::t_33b74c8dcdba9e 800
+  s_6e91bb7a6c261a::t_8a0370c7944839 863-865
+  s_6e91bb7a6c261a::t_9f931821a748e3 823-825
+  s_6e91bb7a6c261a::t_6a13781353ead2 688
+  s_6e91bb7a6c261a::t_e6f3694ed7d05f 908-910,912
+  s_6e91bb7a6c261a::t_ec902f9778a7d6 981-995
+  s_6e91bb7a6c261a::t_7fc5a2ddbab823 815
+  s_6e91bb7a6c261a::t_6fee65d228fb9e 916
+  s_6e91bb7a6c261a::t_f044bef770900e 767
+  s_6e91bb7a6c261a::t_e1d1335888ac03 751-753
+Kiro-account-manager/src/renderer/src/components/accounts/EditAccountDialog.tsx
+  s_6e91bb7a6c261a::t_e8af7c9e1d7193 215
+Kiro-account-manager/src/renderer/src/components/accounts/TagManageDialog.tsx
+  s_6e91bb7a6c261a::t_8084f38d0a862a 152
+Kiro-account-manager/src/main/proxy/logger.ts
+  s_6e91bb7a6c261a::t_859040a43b22fa 7-10,19-32,48-87,100,169,172-173,289-366,369-376,378-382,386-401,405-419,422-451,453-464,467,470-477,479-512,514-523,525,528-538,540-543,545-550,558,561-564,566,569-573,575,578-601,603-617,620-623,625,628-632,686-692
+Kiro-account-manager/src/main/index.ts
+  s_6e91bb7a6c261a::t_ad53f5c54e42c0 2508-2515
+  s_6e91bb7a6c261a::t_9a7b343cdfa4b8 2181-2185
+  s_6e91bb7a6c261a::t_29e588213a1dcb 6132-6136
+Kiro-account-manager/src/renderer/src/components/proxy/ProxyDetailedLogsDialog.tsx
+  s_6e91bb7a6c261a::t_54fd2042b39a08 152-153
+  s_6e91bb7a6c261a::t_bda863baacf41c 5
+  s_6e91bb7a6c261a::t_166d3fecc256ea 109-110,113-114,116-122
+  s_6e91bb7a6c261a::t_be691ff31b9ddc 453
+Kiro-account-manager/src/preload/index.ts
+  s_6e91bb7a6c261a::t_44462c82b67497 1060-1066
+  s_6e91bb7a6c261a::t_6528c12bb452e9 660-676
+Kiro-account-manager/src/renderer/src/main.tsx
+  s_6e91bb7a6c261a::t_849fbf0450df96 5,10-13
+Kiro-account-manager/src/renderer/src/components/pages/LogsPage.tsx
+  s_6e91bb7a6c261a::t_3bff5adf4eef8f 5
+  s_6e91bb7a6c261a::t_da0f8abf876242 183
+  s_6e91bb7a6c261a::t_8735e2e31fb789 113
+  s_6e91bb7a6c261a::t_de38c848807e49 62-63,66-79
+Kiro-account-manager/src/main/utils/redact.ts
+  s_6e91bb7a6c261a::t_ff0ecdf55da733 70-81,86-91,93-97,100-102,104-117,120-121
+Kiro-account-manager/src/renderer/src/App.tsx
+  s_6e91bb7a6c261a::t_40fc252772aeb4 90-102
+  s_6e91bb7a6c261a::t_b1764ab87782e7 7
+Kiro-account-manager/src/preload/index.d.ts
+  s_6e91bb7a6c261a::t_b2702d53d39761 824-829
+  s_6e91bb7a6c261a::t_b02a3f5edf61c0 629-643
+Kiro-account-manager/src/renderer/src/components/accounts/AddAccountDialog.tsx
+  s_6e91bb7a6c261a::t_9c664970e0ebda 1002
+Kiro-account-manager/src/renderer/src/hooks/useProxyLogs.ts
+  s_6e91bb7a6c261a::t_ab956d7dacd19a 1-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.51-trip",
+  "base_commit_sha": "83bb3ab764e01e98127140c760b5f1dcdf7ffb99",
+  "prompts": {},
+  "sessions": {
+    "s_6e91bb7a6c261a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edc77fec-846a-4e13-98f6-97c033d71c1a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "ZhangJin <jinzhanga@trip.com>"
+    }
+  }
+}
